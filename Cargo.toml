@@ -1,0 +1,42 @@
+[package]
+name = "zkir-llvm"
+version = "0.1.0"
+edition = "2021"
+description = "LLVM IR to ZK IR translator"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+
+[dependencies]
+# Core ZK IR types from your existing repo
+zkir-spec = { git = "https://github.com/seceq/zkir", package = "zkir-spec" }
+# Or if developing locally:
+# zkir-spec = { path = "../zkir/zkir-spec" }
+
+# Parsing
+logos = "0.14"              # Lexer generator
+nom = "7"                   # Parser combinators
+
+# LLVM interaction (optional - for bitcode support)
+# llvm-sys = "180"          # Uncomment for LLVM bitcode
+# inkwell = "0.5"           # Safer LLVM wrapper
+
+# Utilities
+thiserror = "1.0"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
+
+# Data structures
+indexmap = "2"              # Ordered hash maps
+petgraph = "0.6"            # Graph algorithms for CFG
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1.3.3"
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+proptest = "1"
