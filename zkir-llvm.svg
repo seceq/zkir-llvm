@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="seceqGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#00b4d8"/>
+      <stop offset="100%" style="stop-color:#023e8a"/>
+    </linearGradient>
+  </defs>
+  
+  <rect width="400" height="400" fill="#FFFFFF"/>
+  
+  <!-- Rounded square container -->
+  <rect x="80" y="45" width="240" height="220" rx="45" fill="url(#seceqGrad)"/>
+  
+  <!-- Back square with horizontal lines (code) -->
+  <rect x="110" y="95" width="90" height="90" rx="12" 
+        fill="none" stroke="#FFFFFF" stroke-width="4" opacity="0.3"/>
+  <g stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.3">
+    <line x1="125" y1="125" x2="175" y2="125"/>
+    <line x1="125" y1="140" x2="185" y2="140"/>
+    <line x1="125" y1="155" x2="165" y2="155"/>
+  </g>
+  
+  <!-- Front square - center at y=165 -->
+  <rect x="200" y="120" width="90" height="90" rx="12" 
+        fill="none" stroke="#FFFFFF" stroke-width="4" opacity="0.8"/>
+  
+  <!-- Binary - using dominant-baseline for proper centering -->
+  <g fill="#FFFFFF" font-family="'IBM Plex Mono', monospace" font-size="18" font-weight="600" text-anchor="middle">
+    <text x="245" y="153" dominant-baseline="middle">0101</text>
+    <text x="245" y="177" dominant-baseline="middle">1100</text>
+  </g>
+  
+  <text x="200" y="320" font-family="'IBM Plex Mono', monospace" font-size="36" font-weight="600" fill="#1C1C1C" text-anchor="middle" letter-spacing="2">ZKIR-LLVM</text>
+  <text x="200" y="345" font-family="'IBM Plex Mono', monospace" font-size="10" font-weight="500" fill="#6B7280" text-anchor="middle" letter-spacing="3">LLVM TO ZK IR COMPILER</text>
+</svg>

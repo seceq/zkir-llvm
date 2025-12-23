@@ -1,4 +1,6 @@
-# zkir-llvm
+<p align="center">
+  <img src="zkir-llvm.svg" alt="zkir-llvm Logo" width="400">
+</p>
 
 LLVM IR to ZK IR translator - enables any language with an LLVM frontend (Rust, C, C++, Go, Swift, etc.) to compile programs that can be proven in zero-knowledge.
 
