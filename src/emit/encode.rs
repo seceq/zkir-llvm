@@ -273,18 +273,18 @@ impl<'a> InstructionEncoder<'a> {
         Ok(encoded.to_le_bytes().to_vec())
     }
 
-    /// Encode RCHK (range check) - this is a ZK-specific instruction.
-    /// Uses I-type format with the register to check as rs1.
-    fn encode_rchk(&self, inst: &MachineInst) -> Result<Vec<u8>> {
-        let rd = self.get_reg_num(&inst.dst)? as u32;
-        // RCHK uses opcode value from zkir-llvm's Opcode enum
-        // Since it's ZK-specific, we encode it directly
-        let opcode = Opcode::RCHK as u32;
-        // Use I-type-like format: [opcode:7][rd:4][rs1:4][imm:17]
-        let encoded = opcode
-            | ((rd & 0xF) << 7)
-            | ((rd & 0xF) << 11) // rs1 = rd for range check
-            | (0 << 15);         // imm = 0
+    /// Encode RCHK (range check) as a NOP.
+    ///
+    /// RCHK is a pseudo-instruction that serves as an optimization hint for the
+    /// ZK prover. It indicates that the value in the register should be range-checked.
+    /// Since ZKIR doesn't have a dedicated range check opcode (valid opcodes are
+    /// 0x00-0x51), we encode RCHK as a NOP (ADDI zero, zero, 0).
+    ///
+    /// The prover can still identify range check opportunities from the witness
+    /// trace without needing explicit RCHK instructions in the bytecode.
+    fn encode_rchk(&self, _inst: &MachineInst) -> Result<Vec<u8>> {
+        // Encode as NOP: ADDI zero, zero, 0
+        let encoded = encode_itype(SpecOpcode::Addi, 0, 0, 0);
         Ok(encoded.to_le_bytes().to_vec())
     }
 

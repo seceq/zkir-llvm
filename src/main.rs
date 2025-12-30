@@ -112,6 +112,11 @@ struct Args {
     /// Suppress configuration warnings
     #[arg(long)]
     no_warnings: bool,
+
+    /// Emit debug symbols (function/global tables for disassembly)
+    /// Note: Debug output is NOT compatible with zkir-spec's Program::from_bytes()
+    #[arg(long, short = 'g')]
+    debug: bool,
 }
 
 fn main() -> Result<()> {
@@ -184,7 +189,13 @@ fn main() -> Result<()> {
 
     match args.emit {
         EmitType::Zkir => {
-            let (bytecode, stats) = zkir_llvm::compile_with_opt(&args.input, &config, opt_level)
+            let mode = if args.debug {
+                zkir_llvm::OutputMode::Debug
+            } else {
+                zkir_llvm::OutputMode::Release
+            };
+
+            let (bytecode, stats) = zkir_llvm::compile_with_mode(&args.input, &config, opt_level, mode)
                 .with_context(|| format!("Failed to compile {}", args.input.display()))?;
 
             let output = args.output.unwrap_or_else(|| {

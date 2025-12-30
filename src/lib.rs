@@ -66,6 +66,7 @@ pub use target::TargetConfig;
 pub use stats::CompileStats;
 pub use debug::{DebugInfo, SourceLoc, LineTable};
 pub use opt::OptLevel;
+pub use emit::OutputMode;
 
 use anyhow::Result;
 use std::path::Path;
@@ -111,6 +112,41 @@ pub fn compile_with_opt<P: AsRef<Path>>(
     config: &TargetConfig,
     opt: OptLevel,
 ) -> Result<(Vec<u8>, CompileStats)> {
+    compile_with_mode(input, config, opt, OutputMode::Release)
+}
+
+/// Compile LLVM bitcode to ZKIR bytecode with debug symbols.
+///
+/// Debug mode includes function and global symbol tables for disassembly.
+/// Note: Debug output is NOT compatible with zkir-spec's Program::from_bytes().
+#[cfg(feature = "inkwell")]
+pub fn compile_debug<P: AsRef<Path>>(
+    input: P,
+    config: &TargetConfig,
+    opt: OptLevel,
+) -> Result<(Vec<u8>, CompileStats)> {
+    compile_with_mode(input, config, opt, OutputMode::Debug)
+}
+
+/// Compile LLVM bitcode to ZKIR bytecode with a specific output mode.
+///
+/// # Arguments
+///
+/// * `input` - Path to LLVM bitcode file (.bc)
+/// * `config` - Target configuration (limb size, data limbs, etc.)
+/// * `opt` - Optimization level (O0, O1, O2, O3, Os)
+/// * `mode` - Output mode (Release for zkir-spec compatible, Debug for symbol tables)
+///
+/// # Returns
+///
+/// The compiled ZKIR bytecode as a byte vector and compilation statistics.
+#[cfg(feature = "inkwell")]
+pub fn compile_with_mode<P: AsRef<Path>>(
+    input: P,
+    config: &TargetConfig,
+    opt: OptLevel,
+    mode: OutputMode,
+) -> Result<(Vec<u8>, CompileStats)> {
     use inkwell::context::Context;
     use inkwell::module::Module;
     use stats::Timer;
@@ -150,7 +186,7 @@ pub fn compile_with_opt<P: AsRef<Path>>(
 
     // Emit ZKIR bytecode
     let emit_timer = Timer::start();
-    let bytecode = emit::emit(&allocated, config)?;
+    let bytecode = emit::emit_with_mode(&allocated, config, mode)?;
     stats.emit_time = emit_timer.stop();
 
     stats.output_size = bytecode.len();
@@ -199,6 +235,31 @@ pub fn compile_with_opt<P: AsRef<Path>>(
     _input: P,
     _config: &TargetConfig,
     _opt: OptLevel,
+) -> Result<(Vec<u8>, CompileStats)> {
+    Err(anyhow::anyhow!(
+        "LLVM support not enabled. Build with --features llvm17-0 (or appropriate version)"
+    ))
+}
+
+/// Stub compile_debug function when LLVM is not available.
+#[cfg(not(feature = "inkwell"))]
+pub fn compile_debug<P: AsRef<Path>>(
+    _input: P,
+    _config: &TargetConfig,
+    _opt: OptLevel,
+) -> Result<(Vec<u8>, CompileStats)> {
+    Err(anyhow::anyhow!(
+        "LLVM support not enabled. Build with --features llvm17-0 (or appropriate version)"
+    ))
+}
+
+/// Stub compile_with_mode function when LLVM is not available.
+#[cfg(not(feature = "inkwell"))]
+pub fn compile_with_mode<P: AsRef<Path>>(
+    _input: P,
+    _config: &TargetConfig,
+    _opt: OptLevel,
+    _mode: OutputMode,
 ) -> Result<(Vec<u8>, CompileStats)> {
     Err(anyhow::anyhow!(
         "LLVM support not enabled. Build with --features llvm17-0 (or appropriate version)"

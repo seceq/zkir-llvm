@@ -95,7 +95,7 @@ fn test_mir_to_bytecode() {
     // Verify bytecode is not empty and starts with magic number
     assert!(!bytecode.is_empty());
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952); // "ZKIR" in little-endian
+    assert_eq!(magic, 0x52494B5A); // "ZKIR" in little-endian
 }
 
 /// Test assembly output formatting.
@@ -1871,7 +1871,7 @@ fn test_bytecode_header_format() {
     let bytecode = emit::emit(&allocated, &config).unwrap();
 
     // Verify header structure (32 bytes total, zkir-spec v3.4):
-    // 0-3:   Magic (u32 LE = 0x5A4B4952)
+    // 0-3:   Magic (u32 LE = 0x52494B5A)
     // 4-7:   Version (u32 LE = 0x00030004)
     // 8:     limb_bits
     // 9:     data_limbs
@@ -1885,7 +1885,7 @@ fn test_bytecode_header_format() {
     assert!(bytecode.len() >= 32, "Bytecode should have at least 32 byte header");
 
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952, "Magic number should be ZKIR");
+    assert_eq!(magic, 0x52494B5A, "Magic number should be ZKIR");
 
     let version = u32::from_le_bytes([bytecode[4], bytecode[5], bytecode[6], bytecode[7]]);
     assert_eq!(version, 0x00030004, "Version should be 3.4");
@@ -2266,7 +2266,7 @@ fn test_full_pipeline_with_optimizations() {
     // Should produce valid bytecode (32-byte header in zkir-spec v3.4)
     assert!(bytecode.len() >= 32, "Should produce bytecode with header");
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952, "Should have valid magic");
+    assert_eq!(magic, 0x52494B5A, "Should have valid magic");
 }
 
 // =============================================================================

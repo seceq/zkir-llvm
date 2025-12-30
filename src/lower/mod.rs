@@ -27,6 +27,7 @@ use crate::target::config::TargetConfig;
 use crate::target::registers::Register;
 use anyhow::{anyhow, Context, Result};
 use indexmap::IndexMap;
+use inkwell::llvm_sys;
 use inkwell::module::Module as LLVMModule;
 use inkwell::values::{AsValueRef, BasicValueEnum, FunctionValue, InstructionOpcode, InstructionValue};
 use inkwell::types::{BasicTypeEnum, BasicType};
@@ -235,6 +236,9 @@ struct LoweringContext<'a> {
     llvm_func: FunctionValue<'a>,
     /// Current source location (from debug info)
     current_loc: Option<SourceLoc>,
+    /// Map from LLVM block debug string to generated labels
+    /// This ensures consistent labeling for unnamed blocks (which have empty names in LLVM IR)
+    block_label_map: HashMap<String, String>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -247,6 +251,42 @@ impl<'a> LoweringContext<'a> {
             bounds_map: HashMap::new(),
             llvm_func,
             current_loc: None,
+            block_label_map: HashMap::new(),
+        }
+    }
+
+    /// Get a unique label for an LLVM basic block.
+    ///
+    /// LLVM basic blocks can have empty names. This method returns a consistent
+    /// generated label for each block based on its debug representation, ensuring
+    /// branches target the correct blocks.
+    fn get_block_label(&self, bb: &inkwell::basic_block::BasicBlock) -> String {
+        // Use the block's debug string as a unique key
+        let key = format!("{:?}", bb);
+        if let Some(label) = self.block_label_map.get(&key) {
+            return label.clone();
+        }
+        // Fallback - should not happen if block_label_map is properly initialized
+        let name = bb.get_name().to_str().unwrap_or("");
+        if name.is_empty() {
+            // Use a hash of the debug string as fallback
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            key.hash(&mut hasher);
+            format!("bb_{:x}", hasher.finish() & 0xFFFF)
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// Initialize the block label map for all blocks in the function.
+    fn init_block_labels(&mut self) {
+        let blocks: Vec<_> = self.llvm_func.get_basic_blocks().into_iter().collect();
+        for (i, bb) in blocks.iter().enumerate() {
+            let key = format!("{:?}", bb);
+            let label = get_block_label(bb, i);
+            self.block_label_map.insert(key, label);
         }
     }
 
@@ -288,24 +328,41 @@ impl<'a> LoweringContext<'a> {
             if ptr.is_const() {
                 // Check if it's a global variable reference
                 // The debug string will contain "global" for globals
+                // or contain "@name" for constant GEP expressions to globals
                 let ptr_str = format!("{:?}", ptr);
-                if ptr_str.contains("global") || ptr_str.starts_with("@") {
+                if ptr_str.contains("global") || ptr_str.contains("@") {
                     // Extract global name - format is typically "@global_name"
                     if let Some(name) = self.extract_global_name(&ptr_str) {
-                        let vreg = self.new_vreg();
-                        self.value_map.insert(key.clone(), vreg);
+                        // Extract GEP offset if this is a constant GEP expression
+                        let gep_offset = self.extract_gep_offset(&ptr_str);
 
-                        // Emit instruction to load global address
-                        // This uses a pseudo-instruction that will be resolved during emission
+                        let base_vreg = self.new_vreg();
+
+                        // Emit instruction to load global base address
                         self.emit(MachineInst::new(Opcode::LI)
-                            .dst(Operand::VReg(vreg))
+                            .dst(Operand::VReg(base_vreg))
                             .src(Operand::GlobalAddr(name.clone()))
                             .comment(format!("load address of global {}", name)));
+
+                        // If there's a GEP offset, add it to the base address
+                        let final_vreg = if gep_offset != 0 {
+                            let result_vreg = self.new_vreg();
+                            self.emit(MachineInst::new(Opcode::ADDI)
+                                .dst(Operand::VReg(result_vreg))
+                                .src(Operand::VReg(base_vreg))
+                                .src(Operand::Imm(gep_offset))
+                                .comment(format!("add GEP offset {} to global {}", gep_offset, name)));
+                            result_vreg
+                        } else {
+                            base_vreg
+                        };
+
+                        self.value_map.insert(key.clone(), final_vreg);
 
                         // Set bounds for pointer
                         self.bounds_map.insert(key, ValueBounds::from_bits(self.config.addr_bits()));
 
-                        return vreg;
+                        return final_vreg;
                     }
                 }
             }
@@ -361,6 +418,63 @@ impl<'a> LoweringContext<'a> {
             }
         }
         None
+    }
+
+    /// Extract GEP offset from a constant GEP expression debug string.
+    ///
+    /// Parses strings like:
+    /// "i32* getelementptr inbounds ([5 x i32], [5 x i32]* @nums, i32 0, i32 4)"
+    ///
+    /// Returns the byte offset based on the indices and element type.
+    fn extract_gep_offset(&self, s: &str) -> i64 {
+        // Look for getelementptr pattern
+        if !s.contains("getelementptr") {
+            return 0;
+        }
+
+        // Try to extract element type size and indices
+        // Format: "TYPE* getelementptr inbounds ([N x ELEMTYPE], [N x ELEMTYPE]* @name, i32 IDX0, i32 IDX1, ...)"
+        //
+        // For [5 x i32], element size is 4 bytes
+        // The indices after the global pointer: i32 0 (array index), i32 4 (element index)
+        // Total offset = idx1 * elem_size (the first index 0 just dereferences the pointer to array)
+
+        // Find the element type size by looking for patterns like "[N x i32]"
+        let elem_size: i64 = if s.contains("i32]") || s.contains("i32*") {
+            4
+        } else if s.contains("i64]") || s.contains("i64*") {
+            8
+        } else if s.contains("i16]") || s.contains("i16*") {
+            2
+        } else if s.contains("i8]") || s.contains("i8*") {
+            1
+        } else {
+            4 // Default to 4 bytes
+        };
+
+        // Find all "i32 N" patterns after the global name
+        // The last numeric index is typically the element offset within the array
+        let mut last_index: i64 = 0;
+
+        // Look for the indices after @name: "i32 0, i32 4)" means indices [0, 4]
+        if let Some(at_pos) = s.find('@') {
+            let after_name = &s[at_pos..];
+            // Find numbers after commas: ", i32 X" patterns
+            for part in after_name.split(',') {
+                let trimmed = part.trim();
+                // Match patterns like "i32 N)" or "i32 N"
+                if let Some(num_start) = trimmed.strip_prefix("i32 ") {
+                    let num_str: String = num_start.chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '-')
+                        .collect();
+                    if let Ok(idx) = num_str.parse::<i64>() {
+                        last_index = idx;
+                    }
+                }
+            }
+        }
+
+        last_index * elem_size
     }
 
     /// Map an LLVM value to an existing vreg.
@@ -462,24 +576,47 @@ impl<'a> LoweringContext<'a> {
     }
 }
 
+/// Generate a unique label for an LLVM basic block.
+///
+/// LLVM basic blocks can have empty names (unnamed blocks are common in optimized code).
+/// We generate unique labels like "bb_0", "bb_1", etc. for these blocks.
+fn get_block_label(bb: &inkwell::basic_block::BasicBlock, block_index: usize) -> String {
+    let name = bb.get_name().to_str().unwrap_or("");
+    if name.is_empty() {
+        format!("bb_{}", block_index)
+    } else {
+        name.to_string()
+    }
+}
+
 /// Lower a single LLVM function to Machine IR.
 fn lower_function(func: &FunctionValue, config: &TargetConfig) -> Result<MachineFunction> {
     let func_name = func.get_name().to_str().unwrap_or("func");
     let mut ctx = LoweringContext::new(func_name, *func, config);
 
+    // Initialize block label map - this ensures consistent labels for unnamed blocks
+    ctx.init_block_labels();
+
     // Lower function parameters
     lower_parameters(&mut ctx)
         .with_context(|| format!("Failed to lower parameters for function '{}'", func_name))?;
 
+    // Build a mapping from LLVM block addresses to unique labels
+    // This ensures consistency between block creation and branch targets
+    let blocks: Vec<_> = func.get_basic_blocks().into_iter().collect();
+    let block_labels: Vec<String> = blocks.iter()
+        .enumerate()
+        .map(|(i, bb)| get_block_label(bb, i))
+        .collect();
+
     // Create blocks first
-    for bb in func.get_basic_blocks() {
-        let label = bb.get_name().to_str().unwrap_or("bb");
+    for label in &block_labels {
         ctx.create_block(label);
     }
 
     // Lower each basic block
-    for bb in func.get_basic_blocks() {
-        let label = bb.get_name().to_str().unwrap_or("bb");
+    for (i, bb) in blocks.iter().enumerate() {
+        let label = &block_labels[i];
         ctx.switch_to_block(label);
 
         // Lower each instruction
@@ -677,7 +814,7 @@ fn lower_instruction<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<
 }
 
 /// Extract constant bytes from an LLVM constant value.
-fn extract_constant_bytes(value: &BasicValueEnum, _config: &TargetConfig) -> Option<Vec<u8>> {
+fn extract_constant_bytes(value: &BasicValueEnum, config: &TargetConfig) -> Option<Vec<u8>> {
     match value {
         BasicValueEnum::IntValue(int_val) => {
             if let Some(val) = int_val.get_zero_extended_constant() {
@@ -702,11 +839,52 @@ fn extract_constant_bytes(value: &BasicValueEnum, _config: &TargetConfig) -> Opt
                     }
                 }
 
-                // For non-string constant arrays, we cannot easily extract elements
-                // in inkwell without get_element_constant. Return None and let the
-                // global be zero-initialized or handled at runtime.
-                // TODO: Consider using LLVM C API directly if element extraction is needed
-                None
+                // For non-string constant arrays, use LLVM C API to extract elements
+                let arr_type = arr.get_type();
+                let len = arr_type.len();
+
+                // Get element type size
+                let elem_type = arr_type.get_element_type();
+                let elem_type_any = match elem_type {
+                    BasicTypeEnum::IntType(t) => inkwell::types::AnyTypeEnum::IntType(t),
+                    BasicTypeEnum::FloatType(t) => inkwell::types::AnyTypeEnum::FloatType(t),
+                    BasicTypeEnum::PointerType(t) => inkwell::types::AnyTypeEnum::PointerType(t),
+                    BasicTypeEnum::ArrayType(t) => inkwell::types::AnyTypeEnum::ArrayType(t),
+                    BasicTypeEnum::VectorType(t) => inkwell::types::AnyTypeEnum::VectorType(t),
+                    BasicTypeEnum::StructType(t) => inkwell::types::AnyTypeEnum::StructType(t),
+                    BasicTypeEnum::ScalableVectorType(t) => inkwell::types::AnyTypeEnum::ScalableVectorType(t),
+                };
+                let elem_bytes = types::type_size_bytes(&elem_type_any, config) as usize;
+
+                let mut result = Vec::with_capacity(len as usize * elem_bytes);
+
+                // Use LLVMConstExtractValue to extract each element (works in LLVM 14+)
+                for i in 0..len {
+                    unsafe {
+                        let mut idx_list = [i];
+                        let elem_ref = llvm_sys::core::LLVMConstExtractValue(
+                            arr.as_value_ref(),
+                            idx_list.as_mut_ptr(),
+                            1
+                        );
+
+                        if elem_ref.is_null() {
+                            // Element not extractable, fall back to zeros
+                            result.extend(std::iter::repeat(0u8).take(elem_bytes));
+                        } else {
+                            // Convert the element to BasicValueEnum and recursively extract
+                            let elem_val = BasicValueEnum::new(elem_ref);
+                            if let Some(elem_bytes_vec) = extract_constant_bytes(&elem_val, config) {
+                                result.extend(elem_bytes_vec);
+                            } else {
+                                // Could not extract element, use zeros
+                                result.extend(std::iter::repeat(0u8).take(elem_bytes));
+                            }
+                        }
+                    }
+                }
+
+                Some(result)
             } else {
                 None
             }

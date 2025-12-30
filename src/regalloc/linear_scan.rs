@@ -32,12 +32,16 @@ pub struct LinearScanAllocator<'a> {
     assignments: HashMap<VReg, Assignment>,
     /// Active intervals (sorted by end point)
     active: BTreeSet<(usize, VReg)>,
-    /// Free registers
-    free_regs: Vec<Register>,
+    /// Free callee-saved registers (R10-R13)
+    free_callee_saved: Vec<Register>,
+    /// Free caller-saved registers (R14-R15, others)
+    free_caller_saved: Vec<Register>,
     /// Next stack slot offset
     next_stack_slot: i32,
     /// Registers used in the function (for callee-save tracking)
     used_regs: HashSet<Register>,
+    /// Positions of call instructions (JAL, JALR, CALL, etc.)
+    call_positions: HashSet<usize>,
 }
 
 impl<'a> LinearScanAllocator<'a> {
@@ -47,16 +51,62 @@ impl<'a> LinearScanAllocator<'a> {
         liveness: &'a LivenessInfo,
         config: &'a TargetConfig,
     ) -> Self {
+        // Separate callee-saved and caller-saved registers
+        let mut callee_saved = Vec::new();
+        let mut caller_saved = Vec::new();
+
+        for reg in ALLOCATABLE_REGS {
+            if CALLEE_SAVED.contains(&reg) {
+                callee_saved.push(reg);
+            } else {
+                caller_saved.push(reg);
+            }
+        }
+
+        // Identify call instruction positions
+        let call_positions = Self::find_call_positions(func);
+
         Self {
             func,
             liveness,
             config,
             assignments: HashMap::new(),
             active: BTreeSet::new(),
-            free_regs: ALLOCATABLE_REGS.to_vec(),
+            free_callee_saved: callee_saved,
+            free_caller_saved: caller_saved,
             next_stack_slot: 0,
             used_regs: HashSet::new(),
+            call_positions,
         }
+    }
+
+    /// Find positions of all call instructions in the function.
+    fn find_call_positions(func: &MachineFunction) -> HashSet<usize> {
+        let mut positions = HashSet::new();
+        let mut position = 0;
+
+        for block in func.iter_blocks() {
+            for inst in &block.insts {
+                // Check if this is a call instruction
+                if matches!(inst.opcode, Opcode::JAL | Opcode::JALR |
+                           Opcode::CALL | Opcode::CALLR) {
+                    positions.insert(position);
+                }
+                position += 1;
+            }
+        }
+
+        positions
+    }
+
+    /// Check if a live range spans any call instructions.
+    fn spans_call(&self, range: &LiveRange) -> bool {
+        for call_pos in &self.call_positions {
+            if *call_pos >= range.start && *call_pos <= range.end {
+                return true;
+            }
+        }
+        false
     }
 
     /// Perform register allocation.
@@ -76,16 +126,39 @@ impl<'a> LinearScanAllocator<'a> {
             // Expire old intervals
             self.expire_old_intervals(range.start);
 
+            // Check if this range spans a call
+            let needs_callee_saved = self.spans_call(&range);
+
             // Try to allocate a register
-            if self.free_regs.is_empty() {
-                // Need to spill
-                self.spill_at_interval(&vreg, &range)?;
+            let reg = if needs_callee_saved {
+                // Prefer callee-saved register for call-spanning ranges
+                if !self.free_callee_saved.is_empty() {
+                    Some(self.free_callee_saved.pop().unwrap())
+                } else if !self.free_caller_saved.is_empty() {
+                    // If no callee-saved available, use caller-saved but we'll spill
+                    None
+                } else {
+                    None
+                }
             } else {
-                // Allocate a free register
-                let reg = self.free_regs.pop().unwrap();
+                // For non-call-spanning ranges, prefer caller-saved first
+                if !self.free_caller_saved.is_empty() {
+                    Some(self.free_caller_saved.pop().unwrap())
+                } else if !self.free_callee_saved.is_empty() {
+                    Some(self.free_callee_saved.pop().unwrap())
+                } else {
+                    None
+                }
+            };
+
+            if let Some(reg) = reg {
+                // Successfully allocated a register
                 self.assignments.insert(vreg, Assignment::Register(reg));
                 self.active.insert((range.end, vreg));
                 self.used_regs.insert(reg);
+            } else {
+                // Need to spill
+                self.spill_at_interval(&vreg, &range)?;
             }
         }
 
@@ -107,9 +180,13 @@ impl<'a> LinearScanAllocator<'a> {
         for item in to_remove {
             self.active.remove(&item);
 
-            // Return register to free pool
+            // Return register to appropriate free pool
             if let Some(Assignment::Register(reg)) = self.assignments.get(&item.1) {
-                self.free_regs.push(*reg);
+                if CALLEE_SAVED.contains(reg) {
+                    self.free_callee_saved.push(*reg);
+                } else {
+                    self.free_caller_saved.push(*reg);
+                }
             }
         }
     }

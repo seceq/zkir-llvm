@@ -4,6 +4,7 @@
 
 use super::LoweringContext;
 use super::types;
+use super::intrinsics::{Intrinsic, lower_intrinsic};
 use crate::mir::{MachineInst, Opcode, Operand, ValueBounds, VReg};
 use crate::target::abi::{compute_arg_locations, ArgLocation};
 use crate::target::registers::{Register, RET_REGS};
@@ -21,7 +22,7 @@ pub fn lower_br<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'a>) 
             .ok_or_else(|| anyhow::anyhow!("Branch instruction missing destination operand"))?;
         let bb = dest_op.block()
             .ok_or_else(|| anyhow::anyhow!("Unconditional branch operand is not a basic block"))?;
-        let label = bb.get_name().to_str().unwrap_or("bb").to_string();
+        let label = ctx.get_block_label(&bb);
 
         // Use JAL with zero destination (effectively a jump)
         let zero = ctx.new_vreg();
@@ -45,8 +46,8 @@ pub fn lower_br<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'a>) 
             .block()
             .ok_or_else(|| anyhow::anyhow!("False destination is not a basic block"))?;
 
-        let true_label = true_bb.get_name().to_str().unwrap_or("bb").to_string();
-        let false_label = false_bb.get_name().to_str().unwrap_or("bb").to_string();
+        let true_label = ctx.get_block_label(&true_bb);
+        let false_label = ctx.get_block_label(&false_bb);
 
         // BNE cond, zero, true_label (branch if cond != 0)
         let zero = ctx.new_vreg();
@@ -82,7 +83,7 @@ pub fn lower_switch<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'
         .ok_or_else(|| anyhow::anyhow!("Switch instruction missing default destination"))?;
     let default_bb = default_op.block()
         .ok_or_else(|| anyhow::anyhow!("Switch default destination is not a basic block"))?;
-    let default_label = default_bb.get_name().to_str().unwrap_or("bb").to_string();
+    let default_label = ctx.get_block_label(&default_bb);
 
     // Get switch cases (pairs of value, destination)
     let num_operands = inst.get_num_operands();
@@ -96,7 +97,7 @@ pub fn lower_switch<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'
             case_val_op.and_then(|op| op.value()),
             case_dest_op.and_then(|op| op.block()),
         ) {
-            let case_label = case_dest.get_name().to_str().unwrap_or("bb").to_string();
+            let case_label = ctx.get_block_label(&case_dest);
             let case_vreg = ctx.get_vreg(&case_val);
 
             // Compare and branch if equal
@@ -186,6 +187,15 @@ pub fn lower_call<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'a>
     } else {
         ("unknown".to_string(), false, None)
     };
+
+    // Check if this is an LLVM intrinsic that we need to handle specially
+    // Intrinsics start with "llvm." and need to be lowered to our own instruction sequences
+    if !is_indirect {
+        let intrinsic = Intrinsic::from_name(&callee_name);
+        if intrinsic != Intrinsic::Unknown {
+            return lower_intrinsic(ctx, inst, intrinsic, &callee_name);
+        }
+    }
 
     // Get argument count (all operands except the last one which is the callee)
     let num_args = num_operands - 1;
@@ -367,7 +377,7 @@ pub fn lower_phi<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'a>)
         let (value, block) = phi.get_incoming(i)
             .ok_or_else(|| anyhow::anyhow!("PHI incoming {} not found", i))?;
         let src_vreg = ctx.get_vreg(&value);
-        let pred_label = block.get_name().to_str().unwrap_or("bb").to_string();
+        let pred_label = ctx.get_block_label(&block);
         phi_inst = phi_inst.phi_incoming(&pred_label, src_vreg);
         log::debug!("PHI: {} = {} from {}", dst, src_vreg, pred_label);
     }

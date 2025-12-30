@@ -11,12 +11,22 @@ use crate::target::config::TargetConfig;
 use anyhow::Result;
 
 pub use encode::{InstructionEncoder, ValidationError, validate_no_vregs};
-pub use binary::BinaryWriter;
+pub use binary::{BinaryWriter, OutputMode};
 pub use disasm::{Disassembler, DisasmInst, disassemble, disassemble_code};
 
-/// Emit a module to ZKIR bytecode.
+/// Emit a module to ZKIR bytecode (release mode - zkir-spec compatible).
 pub fn emit(module: &Module, config: &TargetConfig) -> Result<Vec<u8>> {
-    let mut writer = BinaryWriter::new(config);
+    emit_with_mode(module, config, OutputMode::Release)
+}
+
+/// Emit a module to ZKIR bytecode (debug mode - with symbol tables).
+pub fn emit_debug(module: &Module, config: &TargetConfig) -> Result<Vec<u8>> {
+    emit_with_mode(module, config, OutputMode::Debug)
+}
+
+/// Emit a module to ZKIR bytecode with the specified output mode.
+pub fn emit_with_mode(module: &Module, config: &TargetConfig, mode: OutputMode) -> Result<Vec<u8>> {
+    let mut writer = BinaryWriter::with_mode(config, mode);
     writer.emit_module(module)?;
     Ok(writer.finish())
 }

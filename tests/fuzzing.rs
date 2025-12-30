@@ -261,7 +261,7 @@ proptest! {
 
         prop_assert!(!bytecode.is_empty());
         let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-        prop_assert_eq!(magic, 0x5A4B4952);
+        prop_assert_eq!(magic, 0x52494B5A);
     }
 
     /// Property: Pipeline produces valid bytecode for any config.
@@ -2195,7 +2195,7 @@ fn test_bytecode_structure() {
 
     // Check bytecode starts with ZKIR magic (little-endian u32)
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952);
+    assert_eq!(magic, 0x52494B5A);
     // Check bytecode contains ADD opcode (32-bit encoding format)
     assert!(bytecode_contains_opcode(&bytecode, Opcode::ADD));
 }
@@ -6312,7 +6312,7 @@ fn test_disasm_magic_header() {
 
     // Verify magic header (little-endian u32)
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952);
+    assert_eq!(magic, 0x52494B5A);
 
     let disasm = disassemble(&bytecode).expect("Should disassemble");
     assert!(disasm.contains("ZKIR") || disasm.contains("Header"));

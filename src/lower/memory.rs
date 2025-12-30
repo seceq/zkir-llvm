@@ -17,22 +17,35 @@ pub fn lower_alloca<'a>(ctx: &mut LoweringContext<'a>, inst: &InstructionValue<'
         .map_err(|e| anyhow::anyhow!("Alloca instruction missing allocated type: {}", e))?;
     let size = types::type_size_bytes(&allocated_type.as_any_type_enum(), ctx.config);
 
+    // Get alignment from the instruction, defaulting to 4 bytes
+    let align = inst.get_alignment().unwrap_or(4).max(4);
+
+    // Align the current stack offset to the required alignment
+    let current_size = ctx.func.frame.locals_size;
+    let aligned_offset = (current_size + align - 1) & !(align - 1);
+
     // Update frame for stack allocation
-    let offset = ctx.func.frame.locals_size;
-    ctx.func.frame.locals_size += size;
+    let offset = aligned_offset;
+    ctx.func.frame.locals_size = aligned_offset + size;
 
     // Map result and set bounds
     let (result, dst) = ctx.map_result(inst)?;
 
     // Emit instruction to compute stack address
-    // In the prologue, FP will be set up. Stack slot is FP - offset
-    // For now, emit a pseudo-instruction that will be expanded later
-    // LI dst, stack_offset (placeholder, will be fixed up)
+    // Stack layout after prologue:
+    //   [SP] -> local variables area (lowest addresses)
+    //   [SP + locals_size] -> spill slots
+    //   [SP + locals_size + spill_size] -> callee-saved registers
+    //   [SP + total_size - 8] -> saved FP
+    //   [SP + total_size - 4] -> return address
+    //   [SP + total_size] = old SP = FP
+    //
+    // So locals are at positive offsets from SP (new stack pointer)
     ctx.emit(MachineInst::new(Opcode::ADDI)
         .dst(Operand::VReg(dst))
-        .src(Operand::Reg(crate::target::Register::R3)) // FP (zkir-spec v3.4)
-        .src(Operand::Imm(-(offset as i64)))
-        .comment(format!("alloca {} bytes", size)));
+        .src(Operand::Reg(crate::target::Register::R2)) // SP
+        .src(Operand::Imm(offset as i64))
+        .comment(format!("alloca {} bytes at SP+{}", size, offset)));
 
     // Pointer bounds
     ctx.set_bounds(&result, ValueBounds::from_bits(ctx.config.addr_bits()));

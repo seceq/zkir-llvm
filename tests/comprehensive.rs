@@ -62,7 +62,7 @@ fn test_all_presets_compile() {
         assert!(bytecode.len() >= 32, "Bytecode should have header for {}", preset_name);
         // zkir-spec v3.4: Magic as u32 LE at bytes 0-3
         let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-        assert_eq!(magic, 0x5A4B4952, "Magic number for {}", preset_name);
+        assert_eq!(magic, 0x52494B5A, "Magic number for {}", preset_name);
     }
 }
 
@@ -385,7 +385,7 @@ proptest! {
         let bytecode = emit::emit(&allocated, &config).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
         let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-        prop_assert_eq!(magic, 0x5A4B4952);
+        prop_assert_eq!(magic, 0x52494B5A);
     }
 }
 
@@ -1241,7 +1241,7 @@ fn test_bytecode_header() {
     // zkir-spec v3.4 header format (32 bytes)
     // Magic at bytes 0-3 (little-endian u32)
     let magic = u32::from_le_bytes([bytecode[0], bytecode[1], bytecode[2], bytecode[3]]);
-    assert_eq!(magic, 0x5A4B4952, "Magic number"); // "ZKIR" as u32 LE
+    assert_eq!(magic, 0x52494B5A, "Magic number"); // "ZKIR" as u32 LE
 
     // Version at bytes 4-7 (little-endian u32)
     let version = u32::from_le_bytes([bytecode[4], bytecode[5], bytecode[6], bytecode[7]]);
