@@ -2,41 +2,64 @@
 name = "zkir-llvm"
 version = "0.1.0"
 edition = "2021"
-description = "LLVM IR to ZK IR translator"
+description = "LLVM backend for ZKIR - compiles LLVM bitcode to ZK IR bytecode"
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
+repository = "https://github.com/seceq/zkir-llvm"
+keywords = ["zkvm", "llvm", "compiler", "zero-knowledge"]
+categories = ["compilers", "development-tools"]
+
+[features]
+# NOTE: You must enable one LLVM version feature based on your installed LLVM
+# e.g., `cargo build --features llvm18-1`
+# For development without LLVM, use `cargo check` (default)
+default = []
+inkwell = ["dep:inkwell"]  # Meta-feature for conditional compilation
+# inkwell 0.7.1 uses llvmX-0 for versions 8-17, and llvmX-1 for versions 18+
+llvm14-0 = ["inkwell", "inkwell/llvm14-0"]
+llvm15-0 = ["inkwell", "inkwell/llvm15-0"]
+llvm16-0 = ["inkwell", "inkwell/llvm16-0"]
+llvm17-0 = ["inkwell", "inkwell/llvm17-0"]
+llvm18-1 = ["inkwell", "inkwell/llvm18-1-prefer-dynamic"]
+llvm19-1 = ["inkwell", "inkwell/llvm19-1-prefer-dynamic"]
+llvm20-1 = ["inkwell", "inkwell/llvm20-1-prefer-dynamic"]
+llvm21-1 = ["inkwell", "inkwell/llvm21-1-prefer-dynamic"]
 
 [dependencies]
-# Core ZK IR types from your existing repo
-zkir-spec = { git = "https://github.com/seceq/zkir", package = "zkir-spec" }
-# Or if developing locally:
-# zkir-spec = { path = "../zkir/zkir-spec" }
+# Core ZK IR types from the ZKIR specification
+zkir-spec = { path = "/home/maamoun/zkir/zkir-spec" }
 
-# Parsing
-logos = "0.14"              # Lexer generator
-nom = "7"                   # Parser combinators
-
-# LLVM interaction (optional - for bitcode support)
-# llvm-sys = "180"          # Uncomment for LLVM bitcode
-# inkwell = "0.5"           # Safer LLVM wrapper
+# LLVM bindings - core dependency for reading bitcode
+# Note: Requires LLVM to be installed and a feature like llvm18-0 to be enabled
+# inkwell 0.7 supports LLVM 8-21
+inkwell = { version = "0.7.1", default-features = false, optional = true }
 
 # Utilities
 thiserror = "1.0"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+
+# CLI
 clap = { version = "4", features = ["derive"] }
 
 # Data structures
-indexmap = "2"              # Ordered hash maps
-petgraph = "0.6"            # Graph algorithms for CFG
+indexmap = "2"              # Ordered hash maps (preserves insertion order)
+petgraph = "0.6"            # Graph algorithms for CFG analysis
 
-# Serialization
+# Serialization (for ZKIR binary format)
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-bincode = "1.3.3"
+bincode = "1.3"
 
 [dev-dependencies]
 pretty_assertions = "1"
 tempfile = "3"
 proptest = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[[bin]]
+name = "zkir-llvm"
+path = "src/main.rs"

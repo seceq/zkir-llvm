@@ -1,46 +1,71 @@
-//! Register allocation
+//! Register allocation for ZKIR.
+//!
+//! Implements a simple linear scan register allocator that maps virtual
+//! registers to physical registers, spilling to the stack when necessary.
 
-pub mod linear;
+mod liveness;
+mod linear_scan;
 
-pub use linear::LinearScan;
+use crate::mir::{Module, MachineFunction};
+use crate::target::config::TargetConfig;
+use anyhow::Result;
 
-use thiserror::Error;
+pub use liveness::LivenessInfo;
+pub use linear_scan::LinearScanAllocator;
 
-#[derive(Debug, Error)]
-pub enum RegAllocError {
-    #[error("Out of registers")]
-    OutOfRegisters,
+/// Allocate registers for all functions in a module.
+pub fn allocate(module: &Module, config: &TargetConfig) -> Result<Module> {
+    let mut result = Module::new(&module.name);
 
-    #[error("Invalid register: {0}")]
-    InvalidRegister(u8),
+    // Copy globals
+    result.globals = module.globals.clone();
 
-    #[error("Spill failed: {0}")]
-    SpillFailed(String),
-}
-
-pub type RegAllocResult<T> = Result<T, RegAllocError>;
-
-/// Virtual register identifier
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VirtualReg(pub u32);
-
-/// Physical register identifier
-pub type PhysicalReg = zkir_spec::Register;
-
-/// Live interval for a virtual register
-#[derive(Debug, Clone)]
-pub struct LiveInterval {
-    pub vreg: VirtualReg,
-    pub start: u32,
-    pub end: u32,
-}
-
-impl LiveInterval {
-    pub fn new(vreg: VirtualReg, start: u32, end: u32) -> Self {
-        Self { vreg, start, end }
+    // Allocate registers for each function
+    for func in module.functions.values() {
+        let allocated = allocate_function(func, config)?;
+        result.add_function(allocated);
     }
 
-    pub fn overlaps(&self, other: &LiveInterval) -> bool {
-        self.start < other.end && other.start < self.end
+    Ok(result)
+}
+
+/// Allocate registers for a single function.
+fn allocate_function(func: &MachineFunction, config: &TargetConfig) -> Result<MachineFunction> {
+    // Compute liveness information
+    let liveness = liveness::compute_liveness(func);
+
+    // Run linear scan allocation
+    let mut allocator = LinearScanAllocator::new(func, &liveness, config);
+    let allocated = allocator.allocate()?;
+
+    Ok(allocated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mir::{MachineBlock, MachineInst};
+
+    #[test]
+    fn test_simple_allocation() {
+        let config = TargetConfig::default();
+
+        let mut func = MachineFunction::new("test");
+        let v0 = func.new_vreg();
+        let v1 = func.new_vreg();
+        let v2 = func.new_vreg();
+
+        let mut entry = MachineBlock::new("entry");
+        entry.push(MachineInst::li(v0, 10));
+        entry.push(MachineInst::li(v1, 20));
+        entry.push(MachineInst::add(v2, v0, v1));
+        entry.push(MachineInst::ret());
+        func.add_block(entry);
+
+        let mut module = Module::new("test");
+        module.add_function(func);
+
+        let result = allocate(&module, &config).unwrap();
+        assert!(result.functions.contains_key("test"));
     }
 }
